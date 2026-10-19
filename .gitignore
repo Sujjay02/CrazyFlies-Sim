@@ -1,0 +1,9 @@
+# Third-party code cloned by build_crazysim.sh
+CrazySim/
+crazyflie-lib-python/
+
+# Run outputs
+logs/
+cache/
+build.log
+__pycache__/
