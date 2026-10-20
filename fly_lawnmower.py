@@ -21,28 +21,14 @@ from cflib.crazyflie.log import LogConfig
 from cflib.crazyflie.swarm import CachedCfFactory, Swarm
 from cflib.positioning.position_hl_commander import PositionHlCommander
 
-N_DRONES = 4
+from lawnmower_path import HEIGHT, N_DRONES, VELOCITY, spawn, strip_waypoints
+
 BASE_PORT = 19850
-ARENA = 4.0      # metres, square arena
-HEIGHT = 0.5     # metres
-VELOCITY = 0.4   # m/s
-ROWS = 5         # sweep passes per strip
-LOG_DIR = "logs"
+# Where logs are written. run_sweep.sh sets LOG_DIR per run; default is ./logs.
+LOG_DIR = os.environ.get("LOG_DIR", "logs")
 
 URIS = [f"udp://127.0.0.1:{BASE_PORT + i}" for i in range(N_DRONES)]
-STARTS = {URIS[i]: (float(i), 0.0) for i in range(N_DRONES)}  # must match surg_four.txt
-
-
-def strip_waypoints(i):
-    """Zig-zag path over strip i (width ARENA / N_DRONES)."""
-    width = ARENA / N_DRONES
-    x0 = i * width + width / 2.0
-    ys = [ARENA * k / (ROWS - 1) for k in range(ROWS)]
-    pts = []
-    for k, y in enumerate(ys):
-        dx = -width / 4.0 if k % 2 == 0 else width / 4.0
-        pts.append((x0 + dx, y))
-    return pts
+STARTS = {URIS[i]: spawn(i) for i in range(N_DRONES)}  # must match agents.txt
 
 
 def start_logging(scf, idx):

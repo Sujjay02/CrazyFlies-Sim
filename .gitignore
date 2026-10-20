@@ -7,3 +7,4 @@ logs/
 cache/
 build.log
 __pycache__/
+runs/

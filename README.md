@@ -21,6 +21,9 @@ commanded positions share the world frame of the spawn positions in `agents.txt`
 | `launch_headless.sh` | Start the sim with no viewer window (no X display needed) |
 | `agents.txt` | Four spawn positions, 1 m apart along x |
 | `fly_lawnmower.py` | Each drone sweeps one strip of a 4 m x 4 m arena, logs positions |
+| `lawnmower_path.py` | The sweep geometry (waypoints, height, spawn points), shared by the flight and analysis scripts |
+| `run_sweep.sh` | Runs the sweep under several physics configs with repeats, one log folder per run |
+| `compare_runs.py` | Scores logged flights and compares configs (and, later, hardware runs) |
 
 CrazySim and cflib are cloned into this folder by the build script and are not
 tracked here (see `.gitignore`).
@@ -60,6 +63,30 @@ cd /work && python3 fly_lawnmower.py
 
 The script logs `logs/drone<i>.csv` (10 Hz position estimates) and prints a
 per-drone summary. Drone i is at `udp://127.0.0.1:(19850 + i)`.
+
+## Parameter sweep (the sim side of the sim-to-real comparison)
+
+Stop any sim you have running (Ctrl-C), then inside the container, from one terminal:
+
+```bash
+bash /work/run_sweep.sh                  # baseline, noise, downwash, noise_downwash x 3 runs
+python3 /work/compare_runs.py            # table of mean +/- std per config
+```
+
+`run_sweep.sh` starts the headless sim, flies the sweep, saves the logs to
+`runs/<config>_<k>/`, and stops the sim, for each run. `REPEATS=5` changes the repeat
+count, and naming configs (`bash run_sweep.sh baseline noise`) runs a subset. To sweep
+another knob, add a row to the `FLAGS` table at the top of the script (for example
+`[wind]="--wind-speed 0.3"`).
+
+`compare_runs.py` measures, on airborne samples only: tracking error against the
+commanded zig-zag (`track_rmse`, `track_max`), worst waypoint miss, height overshoot,
+time airborne, and the smallest gap between any two drones. It writes
+`runs/summary_per_run.csv` and `runs/summary_by_config.csv`.
+
+When the real drones fly, log them to the same CSV format (`t_s,x,y,z` per drone,
+`drone0.csv` to `drone3.csv`) in `runs/hw_1/`, `runs/hw_2/`, and so on. Rerunning
+`compare_runs.py` then puts `hw` in the same table as the simulated configs.
 
 ## Notes
 
