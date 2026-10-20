@@ -14,6 +14,11 @@
 # Stop any sim you already have running (Ctrl-C in its terminal) before starting.
 set -uo pipefail
 
+# The sim's prints go to a file here, and Python buffers file output by default,
+# so without this the "firmware connected" lines never show up and the wait loop
+# below times out.
+export PYTHONUNBUFFERED=1
+
 REPEATS=${REPEATS:-3}
 OUT=${OUT:-/work/runs}
 MODEL=${MODEL:-cf2x_T350}
@@ -67,6 +72,8 @@ run_one() {
     done
     if [ "${n:-0}" -lt 4 ]; then
         echo "  FAILED: only ${n:-0}/4 firmware instances connected, see $dir/sim.log"
+        echo "  last lines of sim.log:"
+        tail -n 5 "$dir/sim.log" 2>/dev/null | sed 's/^/    /'
         stop_sim
         return 1
     fi
