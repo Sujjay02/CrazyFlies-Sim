@@ -4,7 +4,7 @@
 Logs each drone's position estimate (10 Hz) to logs/drone<i>.csv and prints a
 per-drone summary, so you can confirm the flight without a viewer.
 
-UNTESTED beyond connecting. Assumptions to check:
+Verified on the first run (2026-10-20), with the sim in the Docker container:
   * CrazySim serves drone i at udp://127.0.0.1:(19850 + i).
   * Commanded positions are in the same world frame as the spawn positions in
     surg_four.txt (0,0 / 1,0 / 2,0 / 3,0).

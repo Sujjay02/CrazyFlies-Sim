@@ -5,8 +5,11 @@ coverage. It uses [CrazySim](https://github.com/gtfactslab/CrazySim) (Crazyflie
 firmware in the loop, MuJoCo physics) inside an Ubuntu 22.04 Docker container, and
 drives the drones with [cflib](https://github.com/bitcraze/crazyflie-lib-python).
 
-Status: the four simulated drones connect and the flight script runs. The
-position-log check of the lawnmower sweep has not been confirmed yet.
+Status: the four simulated drones connect and the lawnmower sweep runs end to end.
+The position-log check passed on the first run (2026-10-20): each drone logged 158
+samples, stayed in its own strip (x from its spawn x to spawn + 0.75 m), covered
+y 0 to 4.01 m, and peaked at z 0.56 m against a 0.5 m command. This confirms
+commanded positions share the world frame of the spawn positions in `agents.txt`.
 
 ## Layout
 
@@ -68,4 +71,4 @@ per-drone summary. Drone i is at `udp://127.0.0.1:(19850 + i)`.
 - Snap Docker needs a `docker` group created manually
   (`sudo addgroup --system docker`) before non-root use.
 - `fly_lawnmower.py` assumes commanded positions share the world frame of the spawn
-  positions in `agents.txt`. Check this from the logs on the first run.
+  positions in `agents.txt`. Confirmed from the logs on the first run (see Status).
