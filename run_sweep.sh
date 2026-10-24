@@ -39,17 +39,37 @@ if [ "$#" -gt 0 ]; then
 fi
 
 # pkill may not exist in the minimal image, so scan /proc instead.
-stop_sim() {
-    local p pid
+# Matches the firmware processes (comm "cf2") and the Python sim, whose command line is
+# "python3 .../mujoco/launch/../crazysim.py ...". Only processes whose command starts
+# with "python" are matched on the script name, so this shell is never hit.
+# The sim holds UDP ports 19950+ until it exits, so wait for it to die (SIGKILL if it
+# ignores SIGTERM) before the next run tries to bind them.
+sim_pids() {
+    local p pid cmd
     for p in /proc/[0-9]*; do
         pid=${p#/proc/}
         [ "$pid" = "$$" ] && continue
-        if [ "$(cat "$p/comm" 2>/dev/null)" = "cf2" ] \
-           || tr '\0' ' ' < "$p/cmdline" 2>/dev/null | grep -q 'mujoco/crazysim\.py'; then
-            kill "$pid" 2>/dev/null || true
-        fi
+        [ "$(cat "$p/comm" 2>/dev/null)" = "cf2" ] && { echo "$pid"; continue; }
+        cmd=$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null) || continue
+        case "$cmd" in
+            python*crazysim.py*) echo "$pid" ;;
+        esac
     done
-    sleep 3
+}
+
+stop_sim() {
+    local pids i
+    pids=$(sim_pids)
+    [ -z "$pids" ] && return 0
+    # shellcheck disable=SC2086
+    kill $pids 2>/dev/null || true
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        sleep 1
+        [ -z "$(sim_pids)" ] && { sleep 1; return 0; }
+    done
+    # shellcheck disable=SC2046
+    kill -9 $(sim_pids) 2>/dev/null || true
+    sleep 2
 }
 
 run_one() {
