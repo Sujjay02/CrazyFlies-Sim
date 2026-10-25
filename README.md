@@ -22,7 +22,8 @@ commanded positions share the world frame of the spawn positions in `agents.txt`
 | `agents.txt` | Four spawn positions, 1 m apart along x |
 | `fly_lawnmower.py` | Each drone sweeps one strip of a 4 m x 4 m arena, logs positions |
 | `lawnmower_path.py` | The sweep geometry (waypoints, height, spawn points), shared by the flight and analysis scripts |
-| `run_sweep.sh` | Runs the sweep under several physics configs with repeats, one log folder per run |
+| `apply_pose_patch.py` | Patches CrazySim so the position measurement can have noise, latency, dropout and a limited rate (applied automatically by `launch_headless.sh`) |
+| `run_sweep.sh` | Runs the sweep under several physics and position-measurement configs with repeats, one log folder per run |
 | `compare_runs.py` | Scores logged flights and compares configs (and, later, hardware runs) |
 
 CrazySim and cflib are cloned into this folder by the build script and are not
@@ -69,7 +70,9 @@ per-drone summary. Drone i is at `udp://127.0.0.1:(19850 + i)`.
 Stop any sim you have running (Ctrl-C), then inside the container, from one terminal:
 
 ```bash
-bash /work/run_sweep.sh                  # baseline, noise, downwash, noise_downwash x 3 runs
+bash /work/run_sweep.sh                  # all configs, 3 runs each (10 configs = 30 flights)
+bash /work/run_sweep.sh physics          # only baseline, noise, downwash, noise_downwash
+bash /work/run_sweep.sh pose             # only the position-measurement configs
 python3 /work/compare_runs.py            # table of mean +/- std per config
 ```
 
@@ -83,6 +86,44 @@ another knob, add a row to the `FLAGS` table at the top of the script (for examp
 commanded zig-zag (`track_rmse`, `track_max`), worst waypoint miss, height overshoot,
 time airborne, and the smallest gap between any two drones. It writes
 `runs/summary_per_run.csv` and `runs/summary_by_config.csv`.
+
+### Position noise, latency and dropout
+
+Stock CrazySim hands the firmware the exact ground-truth position 1000 times a second.
+`--sensor-noise` only affects the IMU and barometer, not the position, and
+`--downwash` only acts between drones closer than 0.3 m (the lawnmower keeps them about
+1 m apart), so neither one models the main way a real positioning system differs from
+the sim. `apply_pose_patch.py` adds that, through environment variables read by the sim:
+
+| Variable | Meaning | Default |
+| --- | --- | --- |
+| `CF_POSE_RATE_HZ` | Position updates per second (0 = every physics step) | 0 |
+| `CF_POSE_NOISE_STD` | Gaussian noise on x, y, z, metres per axis | 0 |
+| `CF_POSE_LATENCY_MS` | Delay before an update reaches the firmware | 0 |
+| `CF_POSE_DROPOUT` | Fraction of updates lost (0 to 1) | 0 |
+| `CF_POSE_SEED` | Integer for reproducible noise and dropouts (`run_sweep.sh` uses the run number) | random |
+
+With none set, the sim behaves exactly like stock CrazySim. Latency and rate run on
+simulation time, so results don't depend on how fast the computer is. Try it by hand:
+
+```bash
+CF_POSE_RATE_HZ=30 CF_POSE_NOISE_STD=0.02 bash /work/launch_headless.sh -m cf2x_T350 -f surg_four.txt
+```
+
+The sweep's `pose` configs are `pose30` (30 Hz, nothing else degraded), `pose_noise1`,
+`pose_noise3`, `pose_lat50`, `pose_drop30` and `pose_all`. Compare them with `pose30`,
+not `baseline`, since dropping from 1 kHz to 30 Hz changes the flight on its own;
+`compare_runs.py` does this automatically in its "change vs reference" table. The
+levels in `run_sweep.sh` are placeholders: replace them with the noise, latency, rate and
+dropout you measure on the real Crazyflies. Run just these with
+`bash /work/run_sweep.sh pose`.
+
+Two caveats. The firmware's position filter assumes 1 cm of noise on external
+positions by default (parameter `locSrv.extPosStdDev`), so large injected noise is
+trusted more than it deserves; setting that parameter to your measured noise level is
+part of making the sim match the hardware. And the patch is tied to this version of
+CrazySim: if a CrazySim update changes the code it edits, the patch refuses to apply
+rather than guessing.
 
 When the real drones fly, log them to the same CSV format (`t_s,x,y,z` per drone,
 `drone0.csv` to `drone3.csv`) in `runs/hw_1/`, `runs/hw_2/`, and so on. Rerunning

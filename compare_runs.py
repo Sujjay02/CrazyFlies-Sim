@@ -116,6 +116,50 @@ def score_run(run_dir):
     }
 
 
+CHANGE_METRICS = ["track_rmse", "track_max", "wp_miss_max", "z_over"]
+MIN_EFFECT_M = 0.002   # differences smaller than 2 mm are never flagged, however tight the spread
+
+
+def reference_for(cfg, configs):
+    """pose_* configs are compared with pose30 (same 30 Hz rate, nothing else
+    degraded); everything else, including pose30 itself, with baseline."""
+    if cfg.startswith("pose_") and "pose30" in configs:
+        return "pose30"
+    return "baseline"
+
+
+def print_changes(by_config):
+    """Change in each config's mean versus its reference. A '*' marks a difference
+    larger than 2 standard errors of the difference and at least MIN_EFFECT_M, a
+    rough screen for 'bigger than the run-to-run spread', not a formal test (runs
+    per config are few)."""
+    rows = []
+    for cfg in sorted(by_config):
+        ref = reference_for(cfg, by_config)
+        if cfg == ref or ref not in by_config:
+            continue
+        a_runs, b_runs = by_config[cfg], by_config[ref]
+        cells = []
+        for m in CHANGE_METRICS:
+            a = np.array([r[m] for r in a_runs])
+            b = np.array([r[m] for r in b_runs])
+            d = float(a.mean() - b.mean())
+            if len(a) > 1 and len(b) > 1:
+                se = float(np.sqrt(a.var(ddof=1) / len(a) + b.var(ddof=1) / len(b)))
+                flag = "*" if abs(d) > 2.0 * se and abs(d) >= MIN_EFFECT_M else " "
+                cells.append(f"{d:+.3f}{flag}")
+            else:
+                cells.append(f"{d:+.3f}?")   # one run: no spread to judge against
+        rows.append((cfg, ref, cells))
+    if not rows:
+        return
+    print("\nChange vs reference, in metres (* = more than 2 standard errors and >= 2 mm; "
+          "? = too few runs to tell)")
+    print(f"{'config':<16}{'vs':<10}" + "".join(f"{m:>14}" for m in CHANGE_METRICS))
+    for cfg, ref, cells in rows:
+        print(f"{cfg:<16}{ref:<10}" + "".join(f"{c:>14}" for c in cells))
+
+
 def main():
     default = "/work/runs" if os.path.isdir("/work/runs") else "runs"
     runs_dir = sys.argv[1] if len(sys.argv) > 1 else default
@@ -163,6 +207,8 @@ def main():
             cells.append(f"{mean:>9.3f}+-{std:<5.3f}")
         agg_rows.append(row)
         print(f"{cfg:<16}{len(runs):>3}" + "".join(f"{c:>16}" for c in cells))
+
+    print_changes(by_config)
 
     fields = ["config", "n"] + [m + s for m in METRICS for s in ("_mean", "_std")]
     with open(os.path.join(runs_dir, "summary_by_config.csv"), "w", newline="") as fh:

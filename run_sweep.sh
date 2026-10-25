@@ -5,6 +5,7 @@
 #
 # Usage:
 #   bash /work/run_sweep.sh                      # all configs below
+#   bash /work/run_sweep.sh pose                 # only the position-measurement configs
 #   bash /work/run_sweep.sh baseline noise       # only these configs
 #   REPEATS=5 bash /work/run_sweep.sh            # more repeats
 #
@@ -24,18 +25,47 @@ OUT=${OUT:-/work/runs}
 MODEL=${MODEL:-cf2x_T350}
 SPAWN_FILE=${SPAWN_FILE:-surg_four.txt}
 
+# Don't let CF_POSE_* values left in your shell leak into the configs below.
+unset CF_POSE_RATE_HZ CF_POSE_NOISE_STD CF_POSE_LATENCY_MS CF_POSE_DROPOUT CF_POSE_SEED
+
 # name -> extra CrazySim flags. Add rows here to sweep more knobs
-# (e.g. "wind:--wind-speed 0.3", "ground:--ground-effect").
+# (e.g. [wind]="--wind-speed 0.3", [ground]="--ground-effect").
 declare -A FLAGS=(
     [baseline]=""
     [noise]="--sensor-noise"
     [downwash]="--downwash"
     [noise_downwash]="--sensor-noise --downwash"
 )
-ORDER=(baseline noise downwash noise_downwash)
 
-if [ "$#" -gt 0 ]; then
-    ORDER=("$@")
+# name -> position-measurement settings (see apply_pose_patch.py). Every "pose" config
+# runs at 30 Hz, so compare them with pose30, NOT with baseline: the baseline sends
+# the exact pose at 1 kHz, and the rate drop alone changes the flight a little.
+# The levels are placeholders, not measured values: replace them with what your
+# hardware shows (noise std in m, latency in ms, dropout as a fraction 0 to 1).
+declare -A ENVS=(
+    [pose30]="CF_POSE_RATE_HZ=30"
+    [pose_noise1]="CF_POSE_RATE_HZ=30 CF_POSE_NOISE_STD=0.01"
+    [pose_noise3]="CF_POSE_RATE_HZ=30 CF_POSE_NOISE_STD=0.03"
+    [pose_lat50]="CF_POSE_RATE_HZ=30 CF_POSE_LATENCY_MS=50"
+    [pose_drop30]="CF_POSE_RATE_HZ=30 CF_POSE_DROPOUT=0.3"
+    [pose_all]="CF_POSE_RATE_HZ=30 CF_POSE_NOISE_STD=0.02 CF_POSE_LATENCY_MS=40 CF_POSE_DROPOUT=0.1"
+)
+
+PHYSICS_ORDER=(baseline noise downwash noise_downwash)
+POSE_ORDER=(pose30 pose_noise1 pose_noise3 pose_lat50 pose_drop30 pose_all)
+
+# Arguments are config names or the groups "physics" and "pose".
+ORDER=()
+if [ "$#" -eq 0 ]; then
+    ORDER=("${PHYSICS_ORDER[@]}" "${POSE_ORDER[@]}")
+else
+    for arg in "$@"; do
+        case "$arg" in
+            physics) ORDER+=("${PHYSICS_ORDER[@]}") ;;
+            pose)    ORDER+=("${POSE_ORDER[@]}") ;;
+            *)       ORDER+=("$arg") ;;
+        esac
+    done
 fi
 
 # pkill may not exist in the minimal image, so scan /proc instead.
@@ -73,15 +103,17 @@ stop_sim() {
 }
 
 run_one() {
-    local name=$1 k=$2 flags=$3
+    local name=$1 k=$2 flags=$3 envs=$4
     local dir="$OUT/${name}_${k}"
     mkdir -p "$dir"
-    echo "=== $name run $k  (flags: ${flags:-none}) ==="
+    echo "=== $name run $k  (flags: ${flags:-none}; pose: ${envs:-stock}) ==="
 
     stop_sim
+    # The run number seeds the pose noise: repeats differ, but the sweep can be redone
+    # exactly. env with no assignments is harmless for configs that set none.
     # shellcheck disable=SC2086
-    nohup bash /work/launch_headless.sh -m "$MODEL" -f "$SPAWN_FILE" $flags \
-        > "$dir/sim.log" 2>&1 &
+    env $envs CF_POSE_SEED="$k" nohup bash /work/launch_headless.sh \
+        -m "$MODEL" -f "$SPAWN_FILE" $flags > "$dir/sim.log" 2>&1 &
 
     # Wait until all four firmware instances have connected to the sim.
     local i n=0
@@ -109,12 +141,13 @@ run_one() {
 
 cd /work
 for name in "${ORDER[@]}"; do
-    if [ -z "${FLAGS[$name]+set}" ]; then
-        echo "Unknown config '$name'. Known: ${!FLAGS[*]}"
+    if [ -z "${FLAGS[$name]+set}" ] && [ -z "${ENVS[$name]+set}" ]; then
+        echo "Unknown config '$name'."
+        echo "Known: ${PHYSICS_ORDER[*]} ${POSE_ORDER[*]}   (groups: physics, pose)"
         exit 1
     fi
     for k in $(seq 1 "$REPEATS"); do
-        run_one "$name" "$k" "${FLAGS[$name]}"
+        run_one "$name" "$k" "${FLAGS[$name]-}" "${ENVS[$name]-}"
     done
 done
 

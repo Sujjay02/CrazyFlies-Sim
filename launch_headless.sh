@@ -6,6 +6,10 @@
 set -euo pipefail
 L=/work/CrazySim/crazyflie-firmware/tools/crazyflie-simulation/simulator_files/mujoco/launch
 
+# Add the configurable position-measurement link (noise, latency, dropout, rate),
+# driven by CF_POSE_* environment variables. Safe to repeat; no-op once applied.
+python3 /work/apply_pose_patch.py "$L/../crazysim.py" || exit 1
+
 # Spawn list for the four drones
 cp /work/agents.txt /work/CrazySim/crazyflie-firmware/tools/crazyflie-simulation/drone_spawn_list/surg_four.txt
 
