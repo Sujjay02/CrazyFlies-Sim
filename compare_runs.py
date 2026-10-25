@@ -33,6 +33,12 @@ drones really were, which hardware cannot tell you without motion capture:
                    shift that best lines the two up. Includes a few ms of logging
                    delay, so compare configs with each other, not with zero.
 
+SIMULATOR SPEED, from the same truth logs (the firmware runs in real time, so a
+simulator that falls behind makes every config fly worse):
+  rtf              simulated seconds per wall-clock second while airborne; 1.00 is
+                   real time, and below about 0.9 the results are degraded
+  stall_pct        percentage of 10 ms simulation steps that took over 20 ms
+
 Estimate and truth are matched by wall-clock time (the flight script stamps each
 sample with time.time(); so does the simulator), so the match does not depend on how
 fast the simulation runs. Accuracy is a few milliseconds.
@@ -53,8 +59,10 @@ from lawnmower_path import HEIGHT, N_DRONES, spawn, strip_waypoints
 
 AIRBORNE_Z = 0.15
 METRICS = ["track_rmse", "track_max", "wp_miss_max", "z_over", "t_air", "sep_min"]
-TRUTH_METRICS = ["true_track_rmse", "true_track_max", "true_z_over", "true_sep_min",
-                 "est_err_rms", "est_err_max", "est_lag_ms"]
+TRUTH_TABLE = ["true_track_rmse", "true_track_max", "true_z_over", "true_sep_min",
+               "est_err_rms", "est_err_max", "est_lag_ms"]
+HEALTH_TABLE = ["rtf", "stall_pct"]
+TRUTH_METRICS = TRUTH_TABLE + HEALTH_TABLE
 LAG_GRID_S = np.arange(-0.300, 0.3001, 0.005)
 
 NAN = float("nan")
@@ -73,13 +81,13 @@ def load(path):
 
 
 def load_truth(path):
-    """Truth log -> array with columns wall_s, x, y, z, sorted by wall time."""
+    """Truth log -> array with columns wall_s, x, y, z, sim_s, sorted by wall time."""
     with open(path) as fh:
         rows = list(csv.DictReader(fh))
     if not rows:
         return None
-    a = np.array([[float(r["wall_s"]), float(r["x"]), float(r["y"]), float(r["z"])]
-                  for r in rows])
+    a = np.array([[float(r["wall_s"]), float(r["x"]), float(r["y"]), float(r["z"]),
+                   float(r["sim_s"])] for r in rows])
     return a[np.argsort(a[:, 0])]
 
 
@@ -154,7 +162,7 @@ def score_truth(run_dir, ests):
     if any(np.all(np.isnan(e[:, 4])) for e in ests):
         return None
 
-    rms, mx, zo, air_windows = [], [], [], []
+    rms, mx, zo, air_windows, rtfs, stalls = [], [], [], [], [], []
     sq_by_lag = np.zeros(len(LAG_GRID_S))
     sq0, n0, max_err = 0.0, 0, 0.0
     for i in range(N_DRONES):
@@ -168,6 +176,10 @@ def score_truth(run_dir, ests):
         mx.append(float(np.max(d)))
         zo.append(float(np.max(air[:, 3]) - HEIGHT))
         air_windows.append((air[0, 0], air[-1, 0]))
+        # simulator speed while airborne: simulated seconds per wall-clock second, and
+        # the share of 10 ms truth rows that took more than 20 ms of wall time
+        rtfs.append(float((air[-1, 4] - air[0, 4]) / max(air[-1, 0] - air[0, 0], 1e-9)))
+        stalls.append(float(100.0 * np.mean(np.diff(air[:, 0]) > 0.020)))
 
         ok = (e[:, 3] > AIRBORNE_Z) & np.isfinite(e[:, 4]) \
             & (e[:, 4] >= tr[0, 0]) & (e[:, 4] <= tr[-1, 0])
@@ -199,6 +211,8 @@ def score_truth(run_dir, ests):
         "est_err_rms": math.sqrt(sq0 / n0),
         "est_err_max": max_err,
         "est_lag_ms": float(LAG_GRID_S[int(np.argmin(sq_by_lag))] * 1000.0),
+        "rtf": float(np.mean(rtfs)),
+        "stall_pct": float(np.mean(stalls)),
     }
 
 
@@ -288,6 +302,10 @@ def fmt_cell(v, m):
     mean, std = float(np.mean(v)), float(np.std(v)) if len(v) > 1 else 0.0
     if m == "est_lag_ms":
         return f"{mean:>7.0f}+-{std:<5.0f}"
+    if m == "rtf":
+        return f"{mean:>7.2f}+-{std:<5.2f}"
+    if m == "stall_pct":
+        return f"{mean:>7.1f}+-{std:<5.1f}"
     return f"{mean:>9.3f}+-{std:<5.3f}"
 
 
@@ -348,23 +366,36 @@ def main():
     with_truth = [c for c in order if len(values(by_config[c], "true_track_rmse"))]
     if with_truth:
         print("\nGround truth (simulation only): where the drone really is")
-        header = f"{'config':<16}{'n':>3}" + "".join(f"{m:>18}" for m in TRUTH_METRICS)
+        header = f"{'config':<16}{'n':>3}" + "".join(f"{m:>18}" for m in TRUTH_TABLE)
         print(header)
         print("-" * len(header))
+        health = []
         for cfg in with_truth:
             runs = by_config[cfg]
             n_truth = len(values(runs, "true_track_rmse"))
             agg_rows[cfg]["truth_n"] = n_truth
-            cells = []
+            cells = {}
             for m in TRUTH_METRICS:
                 v = values(runs, m)
                 agg_rows[cfg][m + "_mean"] = float(np.mean(v)) if len(v) else ""
                 agg_rows[cfg][m + "_std"] = float(np.std(v)) if len(v) > 1 else 0.0
-                cells.append(fmt_cell(v, m) if len(v) else "n/a")
-            print(f"{cfg:<16}{n_truth:>3}" + "".join(f"{c:>18}" for c in cells))
+                cells[m] = fmt_cell(v, m) if len(v) else "n/a"
+            print(f"{cfg:<16}{n_truth:>3}" + "".join(f"{cells[m]:>18}" for m in TRUTH_TABLE))
+            health.append((cfg, n_truth, cells))
         print_changes(by_config, TRUTH_CHANGE_METRICS,
                       "Ground truth, change vs reference (metres; est_lag_ms in ms; "
                       "* = more than 2 standard errors and >= 2 mm / 5 ms)")
+
+        print("\nSimulator speed while flying (rtf 1.00 = real time; stall_pct = % of 10 ms "
+              "steps that took over 20 ms)")
+        print(f"{'config':<16}{'n':>3}" + "".join(f"{m:>18}" for m in HEALTH_TABLE))
+        for cfg, n_truth, cells in health:
+            print(f"{cfg:<16}{n_truth:>3}" + "".join(f"{cells[m]:>18}" for m in HEALTH_TABLE))
+        rtfs = [float(np.mean(values(by_config[c], "rtf"))) for c in with_truth]
+        if min(rtfs) < 0.9:
+            print("Note: the firmware runs in real time, so a simulator below about 0.9 "
+                  "makes every config\nfly worse than it would on a faster machine. "
+                  "Compare configs only within one sweep.")
 
     fields = ["config", "n", "truth_n"] + [m + s for m in METRICS + TRUTH_METRICS
                                            for s in ("_mean", "_std")]

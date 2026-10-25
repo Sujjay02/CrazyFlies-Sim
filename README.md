@@ -153,6 +153,18 @@ hurt through a bad estimate (`est_err_*`) or through the drone actually flying w
 estimate table and show blanks in the truth table. Set `CF_TRUTH_RATE_HZ` to change
 the 100 Hz logging rate.
 
+#### Simulator speed
+
+The firmware runs in real time, so if the simulator can't keep up (it often runs at
+0.8 to 0.9 of real time) every config flies worse than it would on a faster machine.
+`compare_runs.py` therefore prints a speed table: `rtf` (simulated seconds per wall
+second while flying; 1.00 is real time) and `stall_pct` (% of 10 ms steps that took
+over 20 ms). Compare configs only within one sweep, and treat absolute errors as
+upper bounds when `rtf` is below about 0.9. To check whether truth logging itself costs
+speed, run `NO_TRUTH=1 OUT=/work/runs_ab bash /work/run_sweep.sh baseline` and then
+`python3 /work/compare_runs.py /work/runs_ab`. `TRUTH_RATE_HZ` (default 100) sets the
+logging rate for `run_sweep.sh`.
+
 When the real drones fly, log them to the same CSV format (`t_s,x,y,z` per drone,
 `drone0.csv` to `drone3.csv`) in `runs/hw_1/`, `runs/hw_2/`, and so on. Rerunning
 `compare_runs.py` then puts `hw` in the same estimate table as the simulated configs

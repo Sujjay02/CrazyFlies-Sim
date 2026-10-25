@@ -9,6 +9,8 @@
 #   bash /work/run_sweep.sh baseline noise       # only these configs
 #   REPEATS=5 bash /work/run_sweep.sh            # more repeats
 #   SKIP_EXISTING=1 bash /work/run_sweep.sh ...  # redo only runs that have no logs yet
+#   NO_TRUTH=1 OUT=/work/runs_ab bash /work/run_sweep.sh baseline
+#                                                # no ground-truth logging (A/B check of its cost)
 #
 # Output: /work/runs/<config>_<k>/{drone0..3.csv, sim.log, fly.log}
 # Then:   python3 /work/compare_runs.py
@@ -29,6 +31,9 @@ SPAWN_FILE=${SPAWN_FILE:-surg_four.txt}
 # Don't let CF_POSE_* values left in your shell leak into the configs below.
 unset CF_POSE_RATE_HZ CF_POSE_NOISE_STD CF_POSE_LATENCY_MS CF_POSE_DROPOUT CF_POSE_SEED
 unset CF_TRUTH_DIR CF_TRUTH_RATE_HZ
+# Set NO_TRUTH=1 to skip the ground-truth log entirely; TRUTH_RATE_HZ changes its rate.
+NO_TRUTH=${NO_TRUTH:-0}
+TRUTH_RATE_HZ=${TRUTH_RATE_HZ:-100}
 
 # name -> extra CrazySim flags. Add rows here to sweep more knobs
 # (e.g. [wind]="--wind-speed 0.3", [ground]="--ground-effect").
@@ -125,7 +130,10 @@ run_one() {
     # exactly. env with no assignments is harmless for configs that set none.
     # shellcheck disable=SC2086
     # CF_TRUTH_DIR makes the sim write each drone's true position into the run folder.
-    env $envs CF_POSE_SEED="$k" CF_TRUTH_DIR="$dir" nohup bash /work/launch_headless.sh \
+    local truth=""
+    [ "$NO_TRUTH" = "1" ] || truth="CF_TRUTH_DIR=$dir CF_TRUTH_RATE_HZ=$TRUTH_RATE_HZ"
+    # shellcheck disable=SC2086
+    env $envs $truth CF_POSE_SEED="$k" nohup bash /work/launch_headless.sh \
         -m "$MODEL" -f "$SPAWN_FILE" $flags > "$dir/sim.log" 2>&1 &
 
     # Wait until all four firmware instances have connected to the sim.
