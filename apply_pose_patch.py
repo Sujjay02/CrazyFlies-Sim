@@ -19,7 +19,14 @@ use simulation time, so results do not depend on how fast the host runs. Dropout
 applied per measurement (after the rate limit), so combine it with CF_POSE_RATE_HZ:
 at 1 kHz a 30% dropout still leaves hundreds of measurements per second.
 
-The patch is idempotent and keeps a backup at crazysim.py.orig.
+The same script also adds a ground-truth logger. When CF_TRUTH_DIR is set, each drone's
+true simulated position is written to <CF_TRUTH_DIR>/truth_drone<i>.csv (columns sim_s,
+wall_s, x, y, z) at CF_TRUTH_RATE_HZ (default 100). Real hardware cannot give you this,
+and it separates what the drone believes (the estimate the flight script logs) from where
+it really is.
+
+The patch is idempotent, can upgrade a clone patched by an older version, and keeps a
+backup at crazysim.py.orig.
 
 Usage:  python3 apply_pose_patch.py [path/to/crazysim.py]
 """
@@ -29,7 +36,8 @@ import sys
 
 DEFAULT_PATH = ("/work/CrazySim/crazyflie-firmware/tools/crazyflie-simulation/"
                 "simulator_files/mujoco/crazysim.py")
-MARKER = "# --- pose-link patch (apply_pose_patch.py) ---"
+MARKER_POSE = "# --- pose-link patch (apply_pose_patch.py) ---"
+MARKER_TRUTH = "# --- truth-log patch (apply_pose_patch.py) ---"
 
 POSE_LINK = '''\
 # --- pose-link patch (apply_pose_patch.py) ---
@@ -98,8 +106,51 @@ class PoseLink:
 
 '''
 
+TRUTH_LOG = '''\
+# --- truth-log patch (apply_pose_patch.py) ---
+class TruthLog:
+    """Writes the simulator's TRUE position of one drone to
+    <CF_TRUTH_DIR>/truth_drone<i>.csv (columns sim_s, wall_s, x, y, z), at
+    CF_TRUTH_RATE_HZ (default 100). wall_s is time.time(), the same clock the flight
+    script stamps its estimate log with, so estimates and truth can be matched in time
+    whatever the simulation speed. Does nothing when CF_TRUTH_DIR is not set."""
+
+    def __init__(self, path=None, dt=0.001, rate_hz=100.0):
+        self._f = None
+        self._n = 0
+        self._every = max(1, int(round(1.0 / (rate_hz * dt)))) if rate_hz > 0 else 1
+        if path:
+            os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+            # line-buffered, so rows survive the sim being stopped with SIGTERM
+            self._f = open(path, 'w', buffering=1)
+            self._f.write('sim_s,wall_s,x,y,z\\n')
+
+    @classmethod
+    def from_env(cls, agent_id, dt):
+        d = os.environ.get('CF_TRUTH_DIR', '').strip()
+        rate = os.environ.get('CF_TRUTH_RATE_HZ', '').strip()
+        path = os.path.join(d, f'truth_drone{agent_id}.csv') if d else None
+        return cls(path, dt, float(rate) if rate else 100.0)
+
+    @property
+    def enabled(self):
+        return self._f is not None
+
+    def log(self, sim_t, pos):
+        if self._f is None:
+            return
+        self._n += 1
+        if self._n % self._every:
+            return
+        self._f.write(f'{sim_t:.4f},{time.time():.4f},'
+                      f'{pos[0]:.5f},{pos[1]:.5f},{pos[2]:.5f}\\n')
+# --- end truth-log patch ---
+
+
+'''
+
 # (anchor text that must occur exactly once, replacement)
-EDITS = [
+POSE_EDITS = [
     (
         'class DroneAgent:\n    """Per-drone state: UDP sockets, motor dynamics, sensor indices."""\n',
         POSE_LINK + 'class DroneAgent:\n'
@@ -121,28 +172,60 @@ EDITS = [
     ),
 ]
 
+TRUTH_EDITS = [
+    (
+        'class DroneAgent:\n    """Per-drone state: UDP sockets, motor dynamics, sensor indices."""\n',
+        TRUTH_LOG + 'class DroneAgent:\n'
+        '    """Per-drone state: UDP sockets, motor dynamics, sensor indices."""\n',
+    ),
+    (
+        "        print(f'[crazysim] Agent {agent_id}: fw_port={fw_port}  cflib_port={cflib_port}')\n",
+        "        self._truth = TruthLog.from_env(agent_id, dt)  # truth-log patch\n"
+        "        if agent_id == 0 and self._truth.enabled:\n"
+        "            print(f\"[crazysim] Truth log: {os.environ.get('CF_TRUTH_DIR')}\")\n\n"
+        "        print(f'[crazysim] Agent {agent_id}: fw_port={fw_port}  cflib_port={cflib_port}')\n",
+    ),
+    (
+        "        acc, gyro = self.read_imu()\n        pos, quat = self.read_pose()\n",
+        "        acc, gyro = self.read_imu()\n        pos, quat = self.read_pose()\n"
+        "        self._truth.log(self.data.time, pos)  # truth-log patch\n",
+    ),
+]
+
+# (name, marker that says it is already applied, edits). Applied in this order; the
+# groups are independent, so a clone patched by an older version just gets the new one.
+GROUPS = [
+    ("pose-link", MARKER_POSE, POSE_EDITS),
+    ("truth-log", MARKER_TRUTH, TRUTH_EDITS),
+]
+
 
 def apply(path):
     with open(path) as fh:
         src = fh.read()
-    if MARKER in src:
-        print(f"pose-link patch already applied: {path}")
+    applied, present = [], []
+    for name, marker, edits in GROUPS:
+        if marker in src:
+            present.append(name)
+            continue
+        for n, (anchor, repl) in enumerate(edits, 1):
+            count = src.count(anchor)
+            if count != 1:
+                print(f"ERROR: {name} patch point {n} found {count} times in {path} "
+                      "(expected 1). This CrazySim version differs from the one the "
+                      "patch was written for, so nothing was changed.", file=sys.stderr)
+                return 1
+            src = src.replace(anchor, repl)
+        applied.append(name)
+    if not applied:
+        print(f"patches already applied ({', '.join(present)}): {path}")
         return 0
-    for n, (anchor, _) in enumerate(EDITS, 1):
-        count = src.count(anchor)
-        if count != 1:
-            print(f"ERROR: patch point {n} found {count} times in {path} (expected 1). "
-                  "This CrazySim version differs from the one the patch was written "
-                  "for, so nothing was changed.", file=sys.stderr)
-            return 1
-    for anchor, repl in EDITS:
-        src = src.replace(anchor, repl)
     backup = path + ".orig"
     if not os.path.exists(backup):
         shutil.copyfile(path, backup)
     with open(path, "w") as fh:
         fh.write(src)
-    print(f"pose-link patch applied: {path} (backup: {backup})")
+    print(f"patches applied ({', '.join(applied)}): {path} (backup: {backup})")
     return 0
 
 

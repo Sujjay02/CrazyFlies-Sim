@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Four simulated Crazyflies each sweep one vertical strip of a 4 m x 4 m arena.
 
-Logs each drone's position estimate (10 Hz) to logs/drone<i>.csv and prints a
+Logs each drone's position estimate (10 Hz) to logs/drone<i>.csv, with a wall-clock
+column so it can be matched against the simulator's ground-truth log, and prints a
 per-drone summary, so you can confirm the flight without a viewer.
 
 Verified on the first run (2026-10-20), with the sim in the Docker container:
@@ -34,14 +35,18 @@ STARTS = {URIS[i]: spawn(i) for i in range(N_DRONES)}  # must match agents.txt
 def start_logging(scf, idx):
     f = open(os.path.join(LOG_DIR, f"drone{idx}.csv"), "w", newline="")
     w = csv.writer(f)
-    w.writerow(["t_s", "x", "y", "z"])
+    # t_s is the firmware's own clock. wall_s is this computer's clock (time.time()) when
+    # the sample arrived; the simulator's truth log uses the same clock, which is what
+    # lets compare_runs.py line estimates up with the true positions.
+    w.writerow(["t_s", "x", "y", "z", "wall_s"])
     cfg = LogConfig(name="pos", period_in_ms=100)
     for v in ("stateEstimate.x", "stateEstimate.y", "stateEstimate.z"):
         cfg.add_variable(v, "float")
 
     def on_data(timestamp, data, _logconf):
         w.writerow([timestamp / 1000.0, data["stateEstimate.x"],
-                    data["stateEstimate.y"], data["stateEstimate.z"]])
+                    data["stateEstimate.y"], data["stateEstimate.z"],
+                    f"{time.time():.4f}"])
 
     scf.cf.log.add_config(cfg)
     cfg.data_received_cb.add_callback(on_data)

@@ -22,7 +22,7 @@ commanded positions share the world frame of the spawn positions in `agents.txt`
 | `agents.txt` | Four spawn positions, 1 m apart along x |
 | `fly_lawnmower.py` | Each drone sweeps one strip of a 4 m x 4 m arena, logs positions |
 | `lawnmower_path.py` | The sweep geometry (waypoints, height, spawn points), shared by the flight and analysis scripts |
-| `apply_pose_patch.py` | Patches CrazySim so the position measurement can have noise, latency, dropout and a limited rate (applied automatically by `launch_headless.sh`) |
+| `apply_pose_patch.py` | Patches CrazySim so the position measurement can have noise, latency, dropout and a limited rate, and so it can log the drones' true positions (applied automatically by `launch_headless.sh`) |
 | `run_sweep.sh` | Runs the sweep under several physics and position-measurement configs with repeats, one log folder per run |
 | `compare_runs.py` | Scores logged flights and compares configs (and, later, hardware runs) |
 
@@ -127,9 +127,36 @@ part of making the sim match the hardware. And the patch is tied to this version
 CrazySim: if a CrazySim update changes the code it edits, the patch refuses to apply
 rather than guessing.
 
+### Ground truth: where the drones really are
+
+The flight script logs what the drone *believes* (its position estimate), because that is
+all real hardware can log. In the sim you can also record where each drone really is.
+`run_sweep.sh` sets `CF_TRUTH_DIR` for every run, and the patched sim writes
+`truth_drone<i>.csv` (columns `sim_s, wall_s, x, y, z`, 100 Hz) into the run folder next
+to the estimate logs. The flight script stamps its estimate samples with the same
+wall clock, which is how the two get matched, even though the sim doesn't run at exactly
+real time. `compare_runs.py` then prints a second table:
+
+| Column | Meaning |
+| --- | --- |
+| `true_track_rmse`, `true_track_max` | How far the drone really strays from the commanded path |
+| `true_z_over` | Real height overshoot |
+| `true_sep_min` | Real closest approach between any two drones |
+| `est_err_rms`, `est_err_max` | Estimation error: estimate vs truth at the same moment |
+| `est_lag_ms` | How far the estimate trails the truth (includes a few ms of logging delay, so compare configs with each other) |
+
+Why it matters: the estimate-based numbers (`track_*`, `z_over`, `sep_min`) mix real
+motion with measurement noise in the log itself, and the extreme-value ones are biased
+upward by noise. The truth columns separate the two: a degraded position sensor can
+hurt through a bad estimate (`est_err_*`) or through the drone actually flying worse
+(`true_*`). Runs made before this was added have no truth logs; they still score on the
+estimate table and show blanks in the truth table. Set `CF_TRUTH_RATE_HZ` to change
+the 100 Hz logging rate.
+
 When the real drones fly, log them to the same CSV format (`t_s,x,y,z` per drone,
 `drone0.csv` to `drone3.csv`) in `runs/hw_1/`, `runs/hw_2/`, and so on. Rerunning
-`compare_runs.py` then puts `hw` in the same table as the simulated configs.
+`compare_runs.py` then puts `hw` in the same estimate table as the simulated configs
+(`wall_s` is optional for hardware; there is no truth table without motion capture).
 
 ## Notes
 

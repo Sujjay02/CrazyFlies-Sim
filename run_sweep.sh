@@ -28,6 +28,7 @@ SPAWN_FILE=${SPAWN_FILE:-surg_four.txt}
 
 # Don't let CF_POSE_* values left in your shell leak into the configs below.
 unset CF_POSE_RATE_HZ CF_POSE_NOISE_STD CF_POSE_LATENCY_MS CF_POSE_DROPOUT CF_POSE_SEED
+unset CF_TRUTH_DIR CF_TRUTH_RATE_HZ
 
 # name -> extra CrazySim flags. Add rows here to sweep more knobs
 # (e.g. [wind]="--wind-speed 0.3", [ground]="--ground-effect").
@@ -123,7 +124,8 @@ run_one() {
     # The run number seeds the pose noise: repeats differ, but the sweep can be redone
     # exactly. env with no assignments is harmless for configs that set none.
     # shellcheck disable=SC2086
-    env $envs CF_POSE_SEED="$k" nohup bash /work/launch_headless.sh \
+    # CF_TRUTH_DIR makes the sim write each drone's true position into the run folder.
+    env $envs CF_POSE_SEED="$k" CF_TRUTH_DIR="$dir" nohup bash /work/launch_headless.sh \
         -m "$MODEL" -f "$SPAWN_FILE" $flags > "$dir/sim.log" 2>&1 &
 
     # Wait until all four firmware instances have connected to the sim.
