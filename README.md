@@ -77,7 +77,9 @@ python3 /work/compare_runs.py            # table of mean +/- std per config
 ```
 
 `run_sweep.sh` starts the headless sim, flies the sweep, saves the logs to
-`runs/<config>_<k>/`, and stops the sim, for each run. `REPEATS=5` changes the repeat
+`runs/<config>_<k>/`, and stops the sim, for each run. If a run fails, rerun with
+`SKIP_EXISTING=1` (for example `SKIP_EXISTING=1 bash /work/run_sweep.sh`) to redo only
+the runs that have no logs yet. `REPEATS=5` changes the repeat
 count, and naming configs (`bash run_sweep.sh baseline noise`) runs a subset. To sweep
 another knob, add a row to the `FLAGS` table at the top of the script (for example
 `[wind]="--wind-speed 0.3"`).

@@ -8,6 +8,7 @@
 #   bash /work/run_sweep.sh pose                 # only the position-measurement configs
 #   bash /work/run_sweep.sh baseline noise       # only these configs
 #   REPEATS=5 bash /work/run_sweep.sh            # more repeats
+#   SKIP_EXISTING=1 bash /work/run_sweep.sh ...  # redo only runs that have no logs yet
 #
 # Output: /work/runs/<config>_<k>/{drone0..3.csv, sim.log, fly.log}
 # Then:   python3 /work/compare_runs.py
@@ -105,6 +106,16 @@ stop_sim() {
 run_one() {
     local name=$1 k=$2 flags=$3 envs=$4
     local dir="$OUT/${name}_${k}"
+    if [ "${SKIP_EXISTING:-0}" = "1" ]; then
+        local have=1 i
+        for i in 0 1 2 3; do
+            [ -s "$dir/drone$i.csv" ] && [ "$(wc -l < "$dir/drone$i.csv")" -gt 5 ] || have=0
+        done
+        if [ "$have" = "1" ]; then
+            echo "=== $name run $k: already done, skipped ==="
+            return 0
+        fi
+    fi
     mkdir -p "$dir"
     echo "=== $name run $k  (flags: ${flags:-none}; pose: ${envs:-stock}) ==="
 
@@ -118,7 +129,9 @@ run_one() {
     # Wait until all four firmware instances have connected to the sim.
     local i n=0
     for i in $(seq 1 90); do
-        n=$(grep -c "firmware connected" "$dir/sim.log" 2>/dev/null || true)
+        # Count messages, not lines: the sim prints from several threads, so two
+        # messages sometimes land on one line and grep -c would undercount.
+        n=$(grep -o "firmware connected" "$dir/sim.log" 2>/dev/null | wc -l)
         [ "${n:-0}" -ge 4 ] && break
         sleep 1
     done
